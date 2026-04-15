@@ -1,0 +1,44 @@
+{
+  "steps": [
+    {
+      "id": "welcome",
+      "title": "Welcome",
+      "description": "Introduction and overview",
+      "checklist": [
+        { "id": "watch-video", "label": "Watch intro video" },
+        { "id": "complete-required-inputs", "label": "Complete required inputs" },
+        { "id": "submit-for-validation", "label": "Submit for validation" }
+      ]
+    },
+    {
+      "id": "agency-setup",
+      "title": "Agency Setup",
+      "description": "Create roles and users",
+      "checklist": [
+        { "id": "roles-defined", "label": "Define roles and permissions" },
+        { "id": "users-created", "label": "Create initial users" },
+        { "id": "pocs-assigned", "label": "Assign points of contact" }
+      ]
+    },
+    {
+      "id": "technical-readiness",
+      "title": "Technical Readiness",
+      "description": "IT + network preparation",
+      "checklist": [
+        { "id": "firewall-rules", "label": "Document firewall / trusted sites" },
+        { "id": "network-tests", "label": "Run network readiness tests" },
+        { "id": "it-owner-named", "label": "Name IT owner for changes" }
+      ]
+    },
+    {
+      "id": "camera-readiness",
+      "title": "Camera Readiness",
+      "description": "Upload and validate cameras",
+      "checklist": [
+        { "id": "camera-list-uploaded", "label": "Upload camera list" },
+        { "id": "field-validation", "label": "Complete field validation" },
+        { "id": "rtsp-review", "label": "Review RTSP / credentials" }
+      ]
+    }
+  ]
+}
