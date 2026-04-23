@@ -200,6 +200,7 @@ export default function TaskPage({
   const videoSatisfied = useMemo(() => {
     if (!task) return false;
     if (!task.videoEmbedUrl) return true;
+    if (task.videoUnlockAfterSeconds <= 0) return true;
     return (
       videoEnded ||
       isTaskVideoCompleteInStorage(task.id) ||
@@ -258,6 +259,7 @@ export default function TaskPage({
     if (!task || accessBlocked) return false;
     const videoOk =
       !task.videoEmbedUrl ||
+      task.videoUnlockAfterSeconds <= 0 ||
       videoEnded ||
       isTaskVideoCompleteInStorage(task.id) ||
       isTaskComplete;
@@ -379,7 +381,9 @@ export default function TaskPage({
   const instruction = accessBlocked
     ? "Finish earlier tasks first — this one unlocks in order."
     : task.videoEmbedUrl
-      ? "Watch the video, review the task tips below, then use Next task when it unlocks."
+      ? task.videoUnlockAfterSeconds > 0
+        ? "Watch the video, review the task tips below, then use Next task when it unlocks."
+        : "Review the overview video if helpful, then review the task tips below and use Next task when ready."
       : "Fill in the details below, review the task tips, then use Next task.";
 
   const guidanceIdx = getGuidanceVisibleIndex(task.id);
@@ -526,7 +530,10 @@ export default function TaskPage({
             <p className="mt-3 text-sm text-gray-600">{task.whatNext}</p>
           ) : (
             <div className="mt-3">
-              {guidanceIdx < 0 && task.videoEmbedUrl && !videoSatisfied ? (
+              {guidanceIdx < 0 &&
+              task.videoEmbedUrl &&
+              task.videoUnlockAfterSeconds > 0 &&
+              !videoSatisfied ? (
                 <p className="text-sm text-gray-600">
                   Finish the video to see guidance for this task.
                 </p>

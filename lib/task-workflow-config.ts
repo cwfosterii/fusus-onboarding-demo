@@ -73,7 +73,7 @@ export type WorkflowTask = {
   /** HeyGen / YouTube / MP4 embed — null for form-only tasks */
   videoEmbedUrl: string | null;
   videoTitle: string;
-  /** Seconds before unlock (iframe cannot always fire onEnded) */
+  /** Seconds before unlock (iframe cannot always fire onEnded). Use 0 for demo: no wait. */
   videoUnlockAfterSeconds: number;
   /** Shown below the video / above Next */
   whatNext: string;
@@ -108,7 +108,7 @@ export const TASKS: WorkflowTask[] = [
     group: "Welcome",
     videoEmbedUrl: HEYGEN_WELCOME,
     videoTitle: "Fusus Welcome Video",
-    videoUnlockAfterSeconds: 45,
+    videoUnlockAfterSeconds: 0,
     whatNext:
       "When you’re ready, continue to set up roles and permissions for your agency.",
     nextTaskId: "agency-setup-roles",
@@ -121,7 +121,7 @@ export const TASKS: WorkflowTask[] = [
     group: "Agency setup",
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Roles and permissions overview",
-    videoUnlockAfterSeconds: 45,
+    videoUnlockAfterSeconds: 0,
     whatNext: "Next, you’ll add users that match those roles.",
     nextTaskId: "agency-setup-users",
   },
@@ -133,7 +133,7 @@ export const TASKS: WorkflowTask[] = [
     group: "Agency setup",
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Creating users",
-    videoUnlockAfterSeconds: 45,
+    videoUnlockAfterSeconds: 0,
     whatNext: "Then you’ll record primary points of contact for the project.",
     nextTaskId: "agency-setup-pocs",
   },
@@ -163,7 +163,7 @@ export const TASKS: WorkflowTask[] = [
     group: "Camera readiness",
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Camera readiness",
-    videoUnlockAfterSeconds: 45,
+    videoUnlockAfterSeconds: 0,
     whatNext: "Next you’ll complete your camera documentation.",
     nextTaskId: "camera-readiness-assets",
   },
@@ -215,7 +215,7 @@ export const TASKS: WorkflowTask[] = [
     group: "Technical readiness",
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Technical readiness",
-    videoUnlockAfterSeconds: 45,
+    videoUnlockAfterSeconds: 0,
     whatNext:
       "Next you’ll document network details we need for integration.",
     nextTaskId: "technical-readiness-network",
