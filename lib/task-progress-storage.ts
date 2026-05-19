@@ -1,5 +1,23 @@
-import { ALL_TASK_IDS, TOTAL_TASKS, type TaskStatus } from "@/lib/task-workflow-config";
+import {
+  ALL_TASK_IDS,
+  REQUIRED_TASK_IDS,
+  TOTAL_TASKS,
+} from "@/lib/task-workflow-config";
+import {
+  isEffectivelyComplete,
+  isValidLifecycleState,
+  migrateLegacyStatus,
+  nextStateOnOpen,
+  nextStateOnComplete,
+  nextStateOnReject,
+  nextStateOnSubmit,
+  nextStateOnValidate,
+  type TaskLifecycleState,
+} from "@/lib/task-lifecycle";
 
+// ─── Storage keys ─────────────────────────────────────────────────────────────
+
+/** Scoped key — prefix can later include agency/deployment IDs. */
 export const TASK_PROGRESS_KEY = "fusus-task-progress-v1";
 
 /** Set when the Welcome task video unlock timer completes (drives home CTA copy). */
@@ -16,48 +34,106 @@ export function markWelcomeVideoWatched(): void {
   window.dispatchEvent(new Event("fusus-task-progress-updated"));
 }
 
+// ─── Storage shape ────────────────────────────────────────────────────────────
+
 export type TaskProgressState = {
+  /**
+   * Canonical lifecycle state per task.
+   * Source of truth — completedTaskIds is derived from this.
+   */
+  lifecycleByTaskId: Record<string, TaskLifecycleState>;
+  /**
+   * Derived list: tasks whose lifecycle is "validated" or "complete".
+   * Written on every save for backward compat with code that reads completedTaskIds.
+   */
   completedTaskIds: string[];
-  /** Optional per-task status — defaults derived from completed set */
-  statusByTaskId?: Record<string, TaskStatus>;
   /** Per-task: HeyGen/timer gate satisfied (persisted for returning users). */
-  videoCompletedByTaskId?: Record<string, boolean>;
+  videoCompletedByTaskId: Record<string, boolean>;
   /** Per-task: visible index in guidance list (-1 = none yet). */
-  guidanceVisibleIndexByTaskId?: Record<string, number>;
+  guidanceVisibleIndexByTaskId: Record<string, number>;
 };
 
 function defaultState(): TaskProgressState {
   return {
+    lifecycleByTaskId: {},
     completedTaskIds: [],
-    statusByTaskId: {},
     videoCompletedByTaskId: {},
     guidanceVisibleIndexByTaskId: {},
   };
 }
+
+// ─── Read / write ─────────────────────────────────────────────────────────────
 
 export function readTaskProgress(): TaskProgressState {
   if (typeof window === "undefined") return defaultState();
   const raw = window.localStorage.getItem(TASK_PROGRESS_KEY);
   if (!raw) return defaultState();
   try {
-    const parsed = JSON.parse(raw) as TaskProgressState;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    // Migrate old lifecycleByTaskId / statusByTaskId into canonical form
+    const legacyCompleted = Array.isArray(parsed.completedTaskIds)
+      ? (parsed.completedTaskIds as string[])
+      : [];
+
+    const rawLifecycle =
+      parsed.lifecycleByTaskId &&
+      typeof parsed.lifecycleByTaskId === "object" &&
+      !Array.isArray(parsed.lifecycleByTaskId)
+        ? (parsed.lifecycleByTaskId as Record<string, unknown>)
+        : {};
+
+    // Seed from old statusByTaskId (in-progress etc.) if present
+    const legacyStatus =
+      parsed.statusByTaskId &&
+      typeof parsed.statusByTaskId === "object" &&
+      !Array.isArray(parsed.statusByTaskId)
+        ? (parsed.statusByTaskId as Record<string, unknown>)
+        : {};
+
+    const lifecycleByTaskId: Record<string, TaskLifecycleState> = {};
+
+    // Start with old statusByTaskId values
+    for (const [id, v] of Object.entries(legacyStatus)) {
+      lifecycleByTaskId[id] = migrateLegacyStatus(v);
+    }
+
+    // Override with rawLifecycle (newer values)
+    for (const [id, v] of Object.entries(rawLifecycle)) {
+      if (isValidLifecycleState(v)) {
+        lifecycleByTaskId[id] = v;
+      } else {
+        lifecycleByTaskId[id] = migrateLegacyStatus(v);
+      }
+    }
+
+    // Ensure completed tasks are marked complete (backward compat migration)
+    for (const id of legacyCompleted) {
+      if (!lifecycleByTaskId[id] || lifecycleByTaskId[id] === "not_started") {
+        lifecycleByTaskId[id] = "complete";
+      }
+    }
+
+    const completedTaskIds = ALL_TASK_IDS.filter(
+      (id) =>
+        lifecycleByTaskId[id] !== undefined &&
+        isEffectivelyComplete(lifecycleByTaskId[id]),
+    );
+
     return {
-      completedTaskIds: Array.isArray(parsed.completedTaskIds)
-        ? parsed.completedTaskIds
-        : [],
-      statusByTaskId:
-        parsed.statusByTaskId && typeof parsed.statusByTaskId === "object"
-          ? parsed.statusByTaskId
-          : {},
+      lifecycleByTaskId,
+      completedTaskIds,
       videoCompletedByTaskId:
         parsed.videoCompletedByTaskId &&
-        typeof parsed.videoCompletedByTaskId === "object"
-          ? parsed.videoCompletedByTaskId
+        typeof parsed.videoCompletedByTaskId === "object" &&
+        !Array.isArray(parsed.videoCompletedByTaskId)
+          ? (parsed.videoCompletedByTaskId as Record<string, boolean>)
           : {},
       guidanceVisibleIndexByTaskId:
         parsed.guidanceVisibleIndexByTaskId &&
-        typeof parsed.guidanceVisibleIndexByTaskId === "object"
-          ? parsed.guidanceVisibleIndexByTaskId
+        typeof parsed.guidanceVisibleIndexByTaskId === "object" &&
+        !Array.isArray(parsed.guidanceVisibleIndexByTaskId)
+          ? (parsed.guidanceVisibleIndexByTaskId as Record<string, number>)
           : {},
     };
   } catch {
@@ -66,17 +142,103 @@ export function readTaskProgress(): TaskProgressState {
 }
 
 export function writeTaskProgress(state: TaskProgressState) {
-  window.localStorage.setItem(TASK_PROGRESS_KEY, JSON.stringify(state));
+  // Always recompute completedTaskIds from lifecycle before persisting
+  const completedTaskIds = ALL_TASK_IDS.filter(
+    (id) =>
+      state.lifecycleByTaskId[id] !== undefined &&
+      isEffectivelyComplete(state.lifecycleByTaskId[id]),
+  );
+  window.localStorage.setItem(
+    TASK_PROGRESS_KEY,
+    JSON.stringify({ ...state, completedTaskIds }),
+  );
   window.dispatchEvent(new Event("fusus-task-progress-updated"));
 }
+
+// ─── Lifecycle helpers ────────────────────────────────────────────────────────
+
+export function getTaskLifecycleState(taskId: string): TaskLifecycleState {
+  const { lifecycleByTaskId } = readTaskProgress();
+  return lifecycleByTaskId[taskId] ?? "not_started";
+}
+
+export function setTaskLifecycleState(
+  taskId: string,
+  state: TaskLifecycleState,
+) {
+  const prev = readTaskProgress();
+  writeTaskProgress({
+    ...prev,
+    lifecycleByTaskId: { ...prev.lifecycleByTaskId, [taskId]: state },
+  });
+}
+
+/** Transition: not_started → in_progress (never regresses). */
+export function startTask(taskId: string) {
+  const current = getTaskLifecycleState(taskId);
+  const next = nextStateOnOpen(current);
+  if (next !== current) setTaskLifecycleState(taskId, next);
+}
+
+/** Transition: → submitted. */
+export function submitTask(taskId: string) {
+  const current = getTaskLifecycleState(taskId);
+  setTaskLifecycleState(taskId, nextStateOnSubmit(current));
+}
+
+/** Transition: → validated. */
+export function validateTask(taskId: string) {
+  setTaskLifecycleState(taskId, nextStateOnValidate());
+}
+
+/** Transition: → rejected. */
+export function rejectTask(taskId: string) {
+  setTaskLifecycleState(taskId, nextStateOnReject());
+}
+
+/** Transition: → complete (used for video-only tasks). */
+export function completeTask(taskId: string) {
+  setTaskLifecycleState(taskId, nextStateOnComplete());
+}
+
+// ─── Derived helpers (backward compat surface) ────────────────────────────────
 
 export function getCompletedTaskIds(): string[] {
   return readTaskProgress().completedTaskIds;
 }
 
 export function isTaskCompleted(taskId: string): boolean {
-  return readTaskProgress().completedTaskIds.includes(taskId);
+  return isEffectivelyComplete(getTaskLifecycleState(taskId));
 }
+
+/**
+ * @deprecated Use startTask / setTaskLifecycleState instead.
+ */
+export function setTaskStatus(
+  taskId: string,
+  status: "not-started" | "in-progress" | "complete",
+) {
+  const mapped = migrateLegacyStatus(status);
+  setTaskLifecycleState(taskId, mapped);
+}
+
+/**
+ * @deprecated Use completeTask / validateTask instead.
+ * Kept for callers that mark task complete directly (e.g. legacy markTaskComplete).
+ */
+export function markTaskComplete(taskId: string) {
+  const prev = readTaskProgress();
+  writeTaskProgress({
+    ...prev,
+    lifecycleByTaskId: { ...prev.lifecycleByTaskId, [taskId]: "complete" },
+    videoCompletedByTaskId: {
+      ...prev.videoCompletedByTaskId,
+      [taskId]: true,
+    },
+  });
+}
+
+// ─── Video helpers ────────────────────────────────────────────────────────────
 
 export function isTaskVideoCompleteInStorage(taskId: string): boolean {
   return Boolean(readTaskProgress().videoCompletedByTaskId?.[taskId]);
@@ -92,6 +254,8 @@ export function markTaskVideoComplete(taskId: string) {
     },
   });
 }
+
+// ─── Guidance helpers ─────────────────────────────────────────────────────────
 
 export function getGuidanceVisibleIndex(taskId: string): number {
   const v = readTaskProgress().guidanceVisibleIndexByTaskId?.[taskId];
@@ -131,56 +295,36 @@ export function ensureGuidanceStarted(taskId: string, stepCount: number) {
   }
 }
 
-export function markTaskComplete(taskId: string) {
-  const prev = readTaskProgress();
-  const next = new Set(prev.completedTaskIds);
-  next.add(taskId);
-  const statusByTaskId = { ...prev.statusByTaskId, [taskId]: "complete" as const };
-  writeTaskProgress({
-    completedTaskIds: [...next],
-    statusByTaskId,
-    videoCompletedByTaskId: {
-      ...prev.videoCompletedByTaskId,
-      [taskId]: true,
-    },
-  });
-}
+// ─── Readiness / progress ─────────────────────────────────────────────────────
 
-export function setTaskStatus(taskId: string, status: TaskStatus) {
-  const prev = readTaskProgress();
-  writeTaskProgress({
-    ...prev,
-    statusByTaskId: { ...prev.statusByTaskId, [taskId]: status },
-  });
-}
-
-export function getDerivedStatus(taskId: string): TaskStatus {
-  const { completedTaskIds, statusByTaskId } = readTaskProgress();
-  if (completedTaskIds.includes(taskId)) return "complete";
-  const idx = ALL_TASK_IDS.indexOf(taskId);
-  if (idx <= 0) {
-    return statusByTaskId?.[taskId] ?? "not-started";
-  }
-  const prevId = ALL_TASK_IDS[idx - 1];
-  const priorDone = completedTaskIds.includes(prevId);
-  if (!priorDone) return "not-started";
-  return statusByTaskId?.[taskId] ?? "not-started";
-}
-
+/** Percent of required tasks that are validated or complete. */
 export function taskReadinessPercent(): number {
-  const done = getCompletedTaskIds().length;
-  if (TOTAL_TASKS === 0) return 0;
-  return Math.round((done / TOTAL_TASKS) * 100);
+  if (REQUIRED_TASK_IDS.length === 0) return 0;
+  const done = REQUIRED_TASK_IDS.filter((id) =>
+    isEffectivelyComplete(getTaskLifecycleState(id)),
+  ).length;
+  return Math.round((done / REQUIRED_TASK_IDS.length) * 100);
 }
 
+/** True when all required tasks are validated or complete. */
 export function isAllTasksComplete(): boolean {
-  return getCompletedTaskIds().length >= TOTAL_TASKS && TOTAL_TASKS > 0;
+  if (REQUIRED_TASK_IDS.length === 0) return false;
+  return REQUIRED_TASK_IDS.every((id) =>
+    isEffectivelyComplete(getTaskLifecycleState(id)),
+  );
 }
 
+/** First task ID that is not yet validated or complete. */
 export function getFirstIncompleteTaskId(): string | null {
-  const done = new Set(getCompletedTaskIds());
   for (const id of ALL_TASK_IDS) {
-    if (!done.has(id)) return id;
+    if (!isEffectivelyComplete(getTaskLifecycleState(id))) return id;
   }
   return null;
+}
+
+/**
+ * @deprecated Use taskReadinessPercent which is based on required tasks.
+ */
+export function getDerivedStatus(taskId: string): TaskLifecycleState {
+  return getTaskLifecycleState(taskId);
 }

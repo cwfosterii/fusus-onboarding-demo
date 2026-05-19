@@ -1,21 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { NextActionBanner } from "@/components/tasks/NextActionBanner";
 import { TaskProgress } from "@/components/tasks/TaskProgress";
 import {
-  ALL_TASK_IDS,
   TASKS_ORDERED,
   TOTAL_TASKS,
   getTaskById,
   initialsFromName,
   workflow,
 } from "@/lib/task-workflow-config";
+import {
+  isEffectivelyComplete,
+  taskCardShell,
+  TASK_LIFECYCLE_LABEL,
+  taskLifecycleBadgeClass,
+  type TaskLifecycleState,
+} from "@/lib/task-lifecycle";
 import { resetDemo } from "@/lib/demo-reset";
 import {
-  getCompletedTaskIds,
   getFirstIncompleteTaskId,
+  getTaskLifecycleState,
   hasWelcomeVideoBeenWatched,
   isAllTasksComplete,
   taskReadinessPercent,
@@ -37,22 +43,27 @@ export default function Home() {
     };
   }, [refresh]);
 
-  const completedIds = getCompletedTaskIds();
-  const completedSet = useMemo(() => new Set(completedIds), [completedIds]);
+  // All derived state re-reads from localStorage on every render (after refresh).
+  const lifecycleStates = Object.fromEntries(
+    TASKS_ORDERED.map((t) => [t.id, getTaskLifecycleState(t.id)]),
+  ) as Record<string, TaskLifecycleState>;
+
   const readiness = taskReadinessPercent();
   const fullyReady = isAllTasksComplete();
   const firstOpen = getFirstIncompleteTaskId();
   const currentTask = firstOpen ? getTaskById(firstOpen) : null;
 
   const welcomeWatched = hasWelcomeVideoBeenWatched();
+  const completedCount = TASKS_ORDERED.filter((t) =>
+    isEffectivelyComplete(lifecycleStates[t.id]),
+  ).length;
   const hasStartedOnboarding =
-    welcomeWatched || completedIds.length > 0;
+    welcomeWatched || completedCount > 0;
   const bannerCta = hasStartedOnboarding ? "Continue Task" : "Get Started";
   const bannerDescription = hasStartedOnboarding
     ? "Pick up your current task and keep moving through the workflow."
     : "Open your first task to watch the overview and begin onboarding.";
 
-  const completedCount = completedIds.length;
   const remainingCount = TOTAL_TASKS - completedCount;
 
   const psoInitials = initialsFromName(workflow.pso.name);
@@ -169,60 +180,19 @@ export default function Home() {
           </div>
           <ul className="mt-8 grid grid-cols-1 items-stretch gap-6 sm:grid-cols-2">
             {TASKS_ORDERED.map((t) => {
-              const done = completedSet.has(t.id);
+              const state = lifecycleStates[t.id] ?? "not_started";
+              const done = isEffectivelyComplete(state);
               const isCurrent = firstOpen === t.id;
-              const workflowIndex = ALL_TASK_IDS.indexOf(t.id);
-              const priorAllDone = ALL_TASK_IDS.slice(0, workflowIndex).every(
-                (id) => completedSet.has(id),
+
+              // Determine if the card is navigable (prior tasks done or currently active)
+              const taskIdx = TASKS_ORDERED.indexOf(t);
+              const priorAllDone = TASKS_ORDERED.slice(0, taskIdx).every((pt) =>
+                isEffectivelyComplete(lifecycleStates[pt.id]),
               );
               const locked = !done && !priorAllDone && !isCurrent;
 
-              type CardStatus = "completed" | "in-progress" | "not-started";
-              const cardStatus: CardStatus = done
-                ? "completed"
-                : isCurrent
-                  ? "in-progress"
-                  : "not-started";
-
-              const shellByStatus: Record<
-                CardStatus,
-                { border: string; bg: string; hover: string }
-              > = {
-                completed: {
-                  border: "border-green-500",
-                  bg: "bg-green-50",
-                  hover: "hover:border-green-600 hover:shadow-sm",
-                },
-                "in-progress": {
-                  border: "border-yellow-500",
-                  bg: "bg-yellow-50",
-                  hover: "hover:border-yellow-600 hover:shadow-sm",
-                },
-                "not-started": {
-                  border: "border-gray-300",
-                  bg: "bg-gray-50",
-                  hover: "hover:border-gray-400 hover:shadow-sm",
-                },
-              };
-
-              const shell = shellByStatus[cardStatus];
-              const deemphasized = locked;
-              const shellClass = `flex h-full min-h-[11rem] w-full min-w-0 flex-col cursor-pointer rounded-xl border-2 p-5 text-left shadow-sm transition duration-200 ease-out ${shell.border} ${shell.bg} ${shell.hover} ${deemphasized ? "opacity-60" : ""}`;
-
-              const badgeByStatus: Record<CardStatus, string> = {
-                completed:
-                  "border border-green-600/40 bg-green-100/90 text-green-950",
-                "in-progress":
-                  "border border-yellow-600/40 bg-yellow-100/90 text-yellow-950",
-                "not-started":
-                  "border border-gray-400/50 bg-white/80 text-gray-800",
-              };
-
-              const badgeLabel: Record<CardStatus, string> = {
-                completed: "Completed",
-                "in-progress": "In Progress",
-                "not-started": "Not Started",
-              };
+              const shell = taskCardShell(state);
+              const shellClass = `flex h-full min-h-[11rem] w-full min-w-0 flex-col cursor-pointer rounded-xl border-2 p-5 text-left shadow-sm transition duration-200 ease-out ${shell.border} ${shell.bg} ${shell.hover} ${locked ? "opacity-60" : ""}`;
 
               return (
                 <li key={t.id} className="flex h-full min-h-0">
@@ -252,9 +222,9 @@ export default function Home() {
                       </div>
                       <div className="flex shrink-0 justify-end border-t border-black/5 pt-3">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-wide ${badgeByStatus[cardStatus]}`}
+                          className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-wide ring-1 ring-inset ${taskLifecycleBadgeClass(state)}`}
                         >
-                          {badgeLabel[cardStatus]}
+                          {TASK_LIFECYCLE_LABEL[state]}
                         </span>
                       </div>
                     </div>

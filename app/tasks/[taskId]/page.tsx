@@ -18,9 +18,13 @@ import {
   getPreviousTaskId,
   getTaskById,
   getTaskIndex,
-  type TaskStatus,
   type WorkflowTask,
 } from "@/lib/task-workflow-config";
+import {
+  isEffectivelyComplete,
+  mockValidate,
+  type TaskLifecycleState,
+} from "@/lib/task-lifecycle";
 import {
   AGENCY_POC_TASK_ID,
   defaultAgencyPocFormData,
@@ -46,16 +50,19 @@ import {
 } from "@/lib/readiness-data-input";
 import {
   advanceGuidanceVisibleIndex,
+  completeTask,
   ensureGuidanceStarted,
   getCompletedTaskIds,
   getFirstIncompleteTaskId,
   getGuidanceVisibleIndex,
+  getTaskLifecycleState,
   isTaskVideoCompleteInStorage,
-  markTaskComplete,
   markTaskVideoComplete,
   markWelcomeVideoWatched,
   readTaskProgress,
-  setTaskStatus,
+  startTask,
+  submitTask,
+  validateTask,
 } from "@/lib/task-progress-storage";
 
 function formStorageKey(taskId: string) {
@@ -139,6 +146,8 @@ export default function TaskPage({
     useState<SpreadsheetUploadMeta | null>(null);
   const [progressTick, setProgressTick] = useState(0);
   const [showPsoNotes, setShowPsoNotes] = useState(false);
+  const [lifecycleState, setLifecycleState] =
+    useState<TaskLifecycleState>("not_started");
 
   const bumpProgress = useCallback(() => setProgressTick((t) => t + 1), []);
 
@@ -150,10 +159,13 @@ export default function TaskPage({
   }, [taskId]);
 
   useEffect(() => {
-    const onTask = () => bumpProgress();
+    const onTask = () => {
+      bumpProgress();
+      if (task) setLifecycleState(getTaskLifecycleState(task.id));
+    };
     window.addEventListener("fusus-task-progress-updated", onTask);
     return () => window.removeEventListener("fusus-task-progress-updated", onTask);
-  }, [bumpProgress]);
+  }, [bumpProgress, task]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- hydrate from localStorage */
   useEffect(() => {
@@ -163,7 +175,11 @@ export default function TaskPage({
       setHydrated(true);
       return;
     }
-    setTaskStatus(task.id, "in-progress");
+
+    // Advance task to in_progress on open (never regresses)
+    startTask(task.id);
+    setLifecycleState(getTaskLifecycleState(task.id));
+
     if (task.id === AGENCY_POC_TASK_ID) {
       setAgencyPocForm(readAgencyPocFromStorage());
     } else {
@@ -190,7 +206,11 @@ export default function TaskPage({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const completedIds = getCompletedTaskIds();
-  const completedSet = useMemo(() => new Set(completedIds), [completedIds, progressTick]);
+  const completedSet = useMemo(
+    () => new Set(completedIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [completedIds, progressTick],
+  );
 
   const steps = useMemo(
     () => (task ? getGuidanceSteps(task) : []),
@@ -242,18 +262,12 @@ export default function TaskPage({
     writeAgencyPocToStorage(next);
   }, []);
 
-  const status: TaskStatus = useMemo(() => {
-    if (!task) return "not-started";
-    if (completedSet.has(task.id)) return "complete";
-    return "in-progress";
-  }, [task, completedSet]);
+  const isTaskDone = isEffectivelyComplete(lifecycleState);
 
   const accessBlocked = useMemo(() => {
     if (!task) return true;
     return !canAccessTask(task.id, completedSet) && !completedSet.has(task.id);
   }, [task, completedSet]);
-
-  const isTaskComplete = task ? completedSet.has(task.id) : false;
 
   const canProceed = useMemo(() => {
     if (!task || accessBlocked) return false;
@@ -262,7 +276,7 @@ export default function TaskPage({
       task.videoUnlockAfterSeconds <= 0 ||
       videoEnded ||
       isTaskVideoCompleteInStorage(task.id) ||
-      isTaskComplete;
+      isTaskDone;
     const dualEnabled = Boolean(task.form?.dualInputModes);
     const formOk =
       !task.form ||
@@ -271,8 +285,8 @@ export default function TaskPage({
         mode: dataInputMode,
         templateMeta: templateFileMeta,
       }) ||
-      isTaskComplete;
-    return isTaskComplete || (videoOk && formOk);
+      isTaskDone;
+    return isTaskDone || (videoOk && formOk);
   }, [
     task,
     accessBlocked,
@@ -281,27 +295,33 @@ export default function TaskPage({
     agencyPocForm,
     dataInputMode,
     templateFileMeta,
-    isTaskComplete,
+    isTaskDone,
     progressTick,
   ]);
 
   const handleNext = useCallback(async () => {
     if (!task || !canProceed) return;
 
-    if (!isTaskComplete) {
+    if (!isTaskDone) {
       if (task.form) {
+        // 1. Build payload
+        const data =
+          task.id === AGENCY_POC_TASK_ID
+            ? toAgencyPocApiPayload(agencyPocForm)
+            : task.form?.dualInputModes
+              ? buildReadinessSubmitData({
+                  taskId: task.id,
+                  mode: dataInputMode,
+                  manualValues: formValues,
+                  templateMeta: templateFileMeta,
+                })
+              : formValues;
+
+        // 2. Mark as submitted
+        submitTask(task.id);
+
+        // 3. Post to mock endpoint (non-blocking)
         try {
-          const data =
-            task.id === AGENCY_POC_TASK_ID
-              ? toAgencyPocApiPayload(agencyPocForm)
-              : task.form?.dualInputModes
-                ? buildReadinessSubmitData({
-                    taskId: task.id,
-                    mode: dataInputMode,
-                    manualValues: formValues,
-                    templateMeta: templateFileMeta,
-                  })
-                : formValues;
           await fetch(task.form.submitEndpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -314,9 +334,30 @@ export default function TaskPage({
         } catch {
           /* non-blocking for local demo */
         }
+
+        // 4. Mock local validation — Phase 1
+        const isValid = taskFormIsValid(task, formValues, agencyPocForm, {
+          enabled: Boolean(task.form?.dualInputModes),
+          mode: dataInputMode,
+          templateMeta: templateFileMeta,
+        });
+        const validatedState = mockValidate(isValid);
+
+        if (validatedState === "validated") {
+          validateTask(task.id);
+        } else {
+          // rejected — stay on page so user can correct
+          setLifecycleState("rejected");
+          return;
+        }
+      } else {
+        // Video-only task — mark complete
+        completeTask(task.id);
       }
-      markTaskComplete(task.id);
     }
+
+    setLifecycleState(getTaskLifecycleState(task.id));
+    bumpProgress();
 
     const nextId = task.nextTaskId;
     if (nextId) {
@@ -327,12 +368,13 @@ export default function TaskPage({
   }, [
     task,
     canProceed,
-    isTaskComplete,
+    isTaskDone,
     formValues,
     agencyPocForm,
     dataInputMode,
     templateFileMeta,
     router,
+    bumpProgress,
   ]);
 
   const handleDataInputModeChange = useCallback(
@@ -420,6 +462,18 @@ export default function TaskPage({
           </div>
         ) : null}
 
+        {lifecycleState === "rejected" ? (
+          <div
+            className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+            role="alert"
+          >
+            <p className="font-medium">Needs attention</p>
+            <p className="mt-1 text-red-800/90">
+              Some required fields are missing or invalid. Review the form below and try again.
+            </p>
+          </div>
+        ) : null}
+
         <header>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
             {task.title}
@@ -437,7 +491,7 @@ export default function TaskPage({
             <span className="text-xs font-medium text-gray-500">
               Task {index} of {TOTAL_TASKS}
             </span>
-            <TaskStatusBadge status={status} />
+            <TaskStatusBadge status={lifecycleState} />
           </div>
         </div>
 
@@ -471,6 +525,12 @@ export default function TaskPage({
                   </code>
                 </p>
               ) : null}
+              {task.endpointPath ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  Lifecycle endpoint (Phase 2):{" "}
+                  <code className="text-gray-600">{task.endpointPath}</code>
+                </p>
+              ) : null}
               <div className="mt-4 space-y-6">
                 {taskUsesDualInputModes(task) ? (
                   <>
@@ -487,6 +547,7 @@ export default function TaskPage({
                           onChange={handleFormChange}
                           disabled={accessBlocked}
                           showRequiredErrors={
+                            lifecycleState === "rejected" ||
                             !isManualEntryValid(task.form.fields, formValues)
                           }
                         />
@@ -522,7 +583,7 @@ export default function TaskPage({
           <h2 className="text-sm font-semibold text-gray-900">
             What to do next
           </h2>
-          {isTaskComplete ? (
+          {isTaskDone ? (
             <p className="mt-3 text-sm leading-relaxed text-gray-700">
               {task.whatNext}
             </p>

@@ -3,6 +3,15 @@
  * Add tasks here without changing page logic.
  */
 
+export type {
+  TaskLifecycleState,
+  TaskApiPayload,
+} from "@/lib/task-lifecycle";
+
+/**
+ * @deprecated Use TaskLifecycleState from "@/lib/task-lifecycle" instead.
+ * Kept for backward compatibility during migration.
+ */
 export type TaskStatus = "not-started" | "in-progress" | "complete";
 
 export type TaskKind =
@@ -77,11 +86,11 @@ export type WorkflowTask = {
   videoUnlockAfterSeconds: number;
   /** Shown below the video / above Next */
   whatNext: string;
-  /** Optional explicit lines for progressive “What to do next” (splits `whatNext` if omitted). */
+  /** Optional explicit lines for progressive "What to do next" (splits `whatNext` if omitted). */
   guidanceSteps?: string[];
   form?: {
     fields: TaskFormField[];
-    /** Future POST path (mocked in app/api for now) */
+    /** Current mock POST path (app/api). */
     submitEndpoint: string;
     /**
      * When true, task page shows manual vs spreadsheet template flow
@@ -90,6 +99,16 @@ export type WorkflowTask = {
     dualInputModes?: boolean;
   };
   nextTaskId: string | null;
+  /**
+   * Whether this task must reach validated/complete before onsite scheduling unlocks.
+   * Defaults to true when omitted.
+   */
+  required?: boolean;
+  /**
+   * Planned Phase 2 API endpoint for this task.
+   * Not wired to any backend yet — used for documentation and future integration.
+   */
+  endpointPath?: string;
 };
 
 const HEYGEN_WELCOME =
@@ -110,8 +129,10 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "Fusus Welcome Video",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "When you’re ready, continue to set up roles and permissions for your agency.",
+      "When you're ready, continue to set up roles and permissions for your agency.",
     nextTaskId: "agency-setup-roles",
+    required: true,
+    endpointPath: "/api/v1/tasks/welcome",
   },
   {
     id: "agency-setup-roles",
@@ -122,8 +143,10 @@ export const TASKS: WorkflowTask[] = [
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Roles and permissions overview",
     videoUnlockAfterSeconds: 0,
-    whatNext: "Next, you’ll add users that match those roles.",
+    whatNext: "Next, you'll add users that match those roles.",
     nextTaskId: "agency-setup-users",
+    required: true,
+    endpointPath: "/api/v1/tasks/agency-setup",
   },
   {
     id: "agency-setup-users",
@@ -134,8 +157,10 @@ export const TASKS: WorkflowTask[] = [
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Creating users",
     videoUnlockAfterSeconds: 0,
-    whatNext: "Then you’ll record primary points of contact for the project.",
+    whatNext: "Then you'll record primary points of contact for the project.",
     nextTaskId: "agency-setup-pocs",
+    required: true,
+    endpointPath: "/api/v1/tasks/agency-setup",
   },
   {
     id: "agency-setup-pocs",
@@ -154,6 +179,8 @@ export const TASKS: WorkflowTask[] = [
       fields: [],
     },
     nextTaskId: "camera-readiness-overview",
+    required: true,
+    endpointPath: "/api/v1/tasks/agency-setup",
   },
   {
     id: "camera-readiness-overview",
@@ -164,8 +191,10 @@ export const TASKS: WorkflowTask[] = [
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Camera readiness",
     videoUnlockAfterSeconds: 0,
-    whatNext: "Next you’ll complete your camera documentation.",
+    whatNext: "Next you'll complete your camera documentation.",
     nextTaskId: "camera-readiness-assets",
+    required: true,
+    endpointPath: "/api/v1/tasks/camera-readiness",
   },
   {
     id: "camera-readiness-assets",
@@ -178,7 +207,7 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "After submitting, you’ll review IT and network expectations, then document firewall and connectivity details.",
+      "After submitting, you'll review IT and network expectations, then document firewall and connectivity details.",
     form: {
       submitEndpoint: "/api/v1/cameras/asset-intake",
       dualInputModes: true,
@@ -206,6 +235,8 @@ export const TASKS: WorkflowTask[] = [
       ],
     },
     nextTaskId: "technical-readiness-overview",
+    required: true,
+    endpointPath: "/api/v1/tasks/camera-readiness",
   },
   {
     id: "technical-readiness-overview",
@@ -216,9 +247,10 @@ export const TASKS: WorkflowTask[] = [
     videoEmbedUrl: PLACEHOLDER_VIDEO,
     videoTitle: "Technical readiness",
     videoUnlockAfterSeconds: 0,
-    whatNext:
-      "Next you’ll document network details we need for integration.",
+    whatNext: "Next you'll document network details we need for integration.",
     nextTaskId: "technical-readiness-network",
+    required: true,
+    endpointPath: "/api/v1/tasks/technical-readiness",
   },
   {
     id: "technical-readiness-network",
@@ -231,7 +263,7 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "You’re done with guided tasks — schedule your onsite session from the dashboard.",
+      "You're done with guided tasks — schedule your onsite session from the dashboard.",
     form: {
       submitEndpoint: "/api/v1/technical/network-profile",
       dualInputModes: true,
@@ -265,6 +297,8 @@ export const TASKS: WorkflowTask[] = [
       ],
     },
     nextTaskId: null,
+    required: true,
+    endpointPath: "/api/v1/tasks/technical-readiness",
   },
 ];
 
@@ -291,6 +325,11 @@ export function getPreviousTaskId(currentId: string): string | null {
 export const TOTAL_TASKS = TASKS.length;
 
 export const ALL_TASK_IDS = TASKS.map((t) => t.id);
+
+/** IDs of tasks where required !== false. Used for scheduling readiness gate. */
+export const REQUIRED_TASK_IDS = TASKS.filter(
+  (t) => t.required !== false,
+).map((t) => t.id);
 
 /** Sequential guidance lines for the task page (one at a time in UI). */
 export function getGuidanceSteps(task: WorkflowTask): string[] {

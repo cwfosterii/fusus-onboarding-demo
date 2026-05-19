@@ -1,5 +1,5 @@
 import { TaskStatusBadge } from "@/components/tasks/TaskStatusBadge";
-import type { TaskStatus } from "@/lib/task-workflow-config";
+import type { TaskLifecycleState } from "@/lib/task-lifecycle";
 
 type Props = {
   title: string;
@@ -7,7 +7,7 @@ type Props = {
   group: string;
   taskIndex: number;
   totalTasks: number;
-  status: TaskStatus;
+  status: TaskLifecycleState;
 };
 
 export function TaskHeader({
