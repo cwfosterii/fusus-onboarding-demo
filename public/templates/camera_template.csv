@@ -1,2 +1,4 @@
-camera_name,ip_address,rtsp_url,username,password,location_name,latitude,longitude,camera_make,camera_model,channel_number,stream_type,port,protocol,floor,orientation,zoom,disposition,core_name,recording_duration_seconds,ptz_enabled
-Lobby-01,192.168.10.101,rtsp://192.168.10.101:554/Streaming/Channels/101,admin,Ex@mpleP@ss123,Main Lobby,33.7490,-84.3880,Axis,P3245-LVE,1,main,554,TCP,1,north-fixed,optical_3x,optimal,core-east-01,2592000,true
+Camera Name,Make,Model,Location,Floor,Type,Disposition,IP Address,Username,Password,Lat_Lon,AI
+01 Main Entrance,Axis,M1034-LW,Front Desk,First,PTZ,External,10.1.1.4,admin,admin,"99.999999,-99.99999",Yes
+01 Side Entrance - View 1 (East),Axis,M1034-LW,Side Desk,First,Fixed,Internal,,admin,admin,"99.999999,-99.99999",No
+02 Side Entrance - View 2 (West),Axis,M1034-LW,Side Desk,First,Fixed,Internal,10.1.1.7,admin,admin,"99.999999,-99.99999",No

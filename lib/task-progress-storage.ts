@@ -1,5 +1,6 @@
 import {
   ALL_TASK_IDS,
+  OPTIONAL_TASK_IDS,
   REQUIRED_TASK_IDS,
   TOTAL_TASKS,
 } from "@/lib/task-workflow-config";
@@ -297,21 +298,60 @@ export function ensureGuidanceStarted(taskId: string, stepCount: number) {
 
 // ─── Readiness / progress ─────────────────────────────────────────────────────
 
-/** Percent of required tasks that are validated or complete. */
-export function taskReadinessPercent(): number {
-  if (REQUIRED_TASK_IDS.length === 0) return 0;
-  const done = REQUIRED_TASK_IDS.filter((id) =>
+export type ReadinessBreakdown = {
+  /** Required tasks completed (hard gate for scheduling). */
+  requiredDone: number;
+  requiredTotal: number;
+  /** Optional tasks completed (improve score, never block scheduling). */
+  optionalDone: number;
+  optionalTotal: number;
+  /**
+   * Weighted readiness score 0–100.
+   * Required tasks contribute 70%, optional tasks contribute 30%.
+   * All required done = minimum 70. All tasks done = 100.
+   */
+  score: number;
+  /** True when every required task is validated or complete — the scheduling gate. */
+  allRequiredComplete: boolean;
+};
+
+export function getReadinessBreakdown(): ReadinessBreakdown {
+  const requiredDone = REQUIRED_TASK_IDS.filter((id) =>
     isEffectivelyComplete(getTaskLifecycleState(id)),
   ).length;
-  return Math.round((done / REQUIRED_TASK_IDS.length) * 100);
+  const requiredTotal = REQUIRED_TASK_IDS.length;
+
+  const optionalDone = OPTIONAL_TASK_IDS.filter((id) =>
+    isEffectivelyComplete(getTaskLifecycleState(id)),
+  ).length;
+  const optionalTotal = OPTIONAL_TASK_IDS.length;
+
+  // Required contributes 70%, optional contributes 30%
+  const reqContrib = requiredTotal > 0 ? (requiredDone / requiredTotal) * 0.7 : 0;
+  const optContrib = optionalTotal > 0 ? (optionalDone / optionalTotal) * 0.3 : 0;
+  const score = Math.round((reqContrib + optContrib) * 100);
+
+  return {
+    requiredDone,
+    requiredTotal,
+    optionalDone,
+    optionalTotal,
+    score,
+    allRequiredComplete: requiredDone === requiredTotal && requiredTotal > 0,
+  };
+}
+
+/**
+ * Weighted readiness percent.
+ * Required tasks contribute 70%, optional 30%, so all-required-done = 70%.
+ */
+export function taskReadinessPercent(): number {
+  return getReadinessBreakdown().score;
 }
 
 /** True when all required tasks are validated or complete. */
 export function isAllTasksComplete(): boolean {
-  if (REQUIRED_TASK_IDS.length === 0) return false;
-  return REQUIRED_TASK_IDS.every((id) =>
-    isEffectivelyComplete(getTaskLifecycleState(id)),
-  );
+  return getReadinessBreakdown().allRequiredComplete;
 }
 
 /** First task ID that is not yet validated or complete. */

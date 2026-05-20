@@ -119,6 +119,7 @@ const PLACEHOLDER_VIDEO =
   "https://app.heygen.com/embeds/810503c405734646b776281f3a81cc57";
 
 export const TASKS: WorkflowTask[] = [
+  // ── Required tasks (hard gate for scheduling) ────────────────────────────
   {
     id: "welcome",
     kind: "video-guidance",
@@ -129,38 +130,10 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "Fusus Welcome Video",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "When you're ready, continue to set up roles and permissions for your agency.",
-    nextTaskId: "agency-setup-roles",
-    required: true,
-    endpointPath: "/api/v1/tasks/welcome",
-  },
-  {
-    id: "agency-setup-roles",
-    kind: "video-guidance",
-    title: "Roles & permissions",
-    intro: "Learn how to structure roles before creating users.",
-    group: "Agency setup",
-    videoEmbedUrl: PLACEHOLDER_VIDEO,
-    videoTitle: "Roles and permissions overview",
-    videoUnlockAfterSeconds: 0,
-    whatNext: "Next, you'll add users that match those roles.",
-    nextTaskId: "agency-setup-users",
-    required: true,
-    endpointPath: "/api/v1/tasks/agency-setup",
-  },
-  {
-    id: "agency-setup-users",
-    kind: "video-guidance",
-    title: "Create users",
-    intro: "Walk through creating agency and technical users.",
-    group: "Agency setup",
-    videoEmbedUrl: PLACEHOLDER_VIDEO,
-    videoTitle: "Creating users",
-    videoUnlockAfterSeconds: 0,
-    whatNext: "Then you'll record primary points of contact for the project.",
+      "Next, you'll submit your agency points of contact.",
     nextTaskId: "agency-setup-pocs",
     required: true,
-    endpointPath: "/api/v1/tasks/agency-setup",
+    endpointPath: "/api/v1/tasks/welcome",
   },
   {
     id: "agency-setup-pocs",
@@ -172,29 +145,15 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "Submit the form to continue. You can update contacts later with your PSO.",
+      "Next, you'll document your cameras for the deployment.",
     form: {
       submitEndpoint: "/api/v1/agency/points-of-contact",
       /** Rendered by `AgencyPointsOfContactForm` — nested body for POST. */
       fields: [],
     },
-    nextTaskId: "camera-readiness-overview",
-    required: true,
-    endpointPath: "/api/v1/tasks/agency-setup",
-  },
-  {
-    id: "camera-readiness-overview",
-    kind: "video-guidance",
-    title: "Camera readiness overview",
-    intro: "How we validate cameras and RTSP details in your environment.",
-    group: "Camera readiness",
-    videoEmbedUrl: PLACEHOLDER_VIDEO,
-    videoTitle: "Camera readiness",
-    videoUnlockAfterSeconds: 0,
-    whatNext: "Next you'll complete your camera documentation.",
     nextTaskId: "camera-readiness-assets",
     required: true,
-    endpointPath: "/api/v1/tasks/camera-readiness",
+    endpointPath: "/api/v1/tasks/agency-setup",
   },
   {
     id: "camera-readiness-assets",
@@ -207,7 +166,7 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "After submitting, you'll review IT and network expectations, then document firewall and connectivity details.",
+      "Next, you'll capture network and firewall details for your environment.",
     form: {
       submitEndpoint: "/api/v1/cameras/asset-intake",
       dualInputModes: true,
@@ -234,23 +193,9 @@ export const TASKS: WorkflowTask[] = [
         },
       ],
     },
-    nextTaskId: "technical-readiness-overview",
-    required: true,
-    endpointPath: "/api/v1/tasks/camera-readiness",
-  },
-  {
-    id: "technical-readiness-overview",
-    kind: "video-guidance",
-    title: "Technical readiness overview",
-    intro: "Understand IT and network expectations before go-live.",
-    group: "Technical readiness",
-    videoEmbedUrl: PLACEHOLDER_VIDEO,
-    videoTitle: "Technical readiness",
-    videoUnlockAfterSeconds: 0,
-    whatNext: "Next you'll document network details we need for integration.",
     nextTaskId: "technical-readiness-network",
     required: true,
-    endpointPath: "/api/v1/tasks/technical-readiness",
+    endpointPath: "/api/v1/tasks/camera-readiness",
   },
   {
     id: "technical-readiness-network",
@@ -263,7 +208,7 @@ export const TASKS: WorkflowTask[] = [
     videoTitle: "",
     videoUnlockAfterSeconds: 0,
     whatNext:
-      "You're done with guided tasks — schedule your onsite session from the dashboard.",
+      "Required tasks complete — you can now schedule onsite. Continue with recommended tasks to improve deployment readiness.",
     form: {
       submitEndpoint: "/api/v1/technical/network-profile",
       dualInputModes: true,
@@ -296,8 +241,66 @@ export const TASKS: WorkflowTask[] = [
         },
       ],
     },
-    nextTaskId: null,
+    nextTaskId: "agency-setup-roles",
     required: true,
+    endpointPath: "/api/v1/tasks/technical-readiness",
+  },
+  // ── Recommended tasks (improve readiness, never block scheduling) ────────
+  {
+    id: "agency-setup-roles",
+    kind: "video-guidance",
+    title: "Roles & permissions",
+    intro: "Learn how to structure roles before creating users.",
+    group: "Agency setup",
+    videoEmbedUrl: PLACEHOLDER_VIDEO,
+    videoTitle: "Roles and permissions overview",
+    videoUnlockAfterSeconds: 0,
+    whatNext: "Next, you'll walk through creating users for those roles.",
+    nextTaskId: "agency-setup-users",
+    required: false,
+    endpointPath: "/api/v1/tasks/agency-setup",
+  },
+  {
+    id: "agency-setup-users",
+    kind: "video-guidance",
+    title: "Create users",
+    intro: "Walk through creating agency and technical users.",
+    group: "Agency setup",
+    videoEmbedUrl: PLACEHOLDER_VIDEO,
+    videoTitle: "Creating users",
+    videoUnlockAfterSeconds: 0,
+    whatNext: "Next, review what to expect during camera validation.",
+    nextTaskId: "camera-readiness-overview",
+    required: false,
+    endpointPath: "/api/v1/tasks/agency-setup",
+  },
+  {
+    id: "camera-readiness-overview",
+    kind: "video-guidance",
+    title: "Camera readiness overview",
+    intro: "How we validate cameras and RTSP details in your environment.",
+    group: "Camera readiness",
+    videoEmbedUrl: PLACEHOLDER_VIDEO,
+    videoTitle: "Camera readiness",
+    videoUnlockAfterSeconds: 0,
+    whatNext: "Finally, review IT and network expectations before go-live.",
+    nextTaskId: "technical-readiness-overview",
+    required: false,
+    endpointPath: "/api/v1/tasks/camera-readiness",
+  },
+  {
+    id: "technical-readiness-overview",
+    kind: "video-guidance",
+    title: "Technical readiness overview",
+    intro: "Understand IT and network expectations before go-live.",
+    group: "Technical readiness",
+    videoEmbedUrl: PLACEHOLDER_VIDEO,
+    videoTitle: "Technical readiness",
+    videoUnlockAfterSeconds: 0,
+    whatNext:
+      "All recommended tasks complete — your deployment team is fully prepared.",
+    nextTaskId: null,
+    required: false,
     endpointPath: "/api/v1/tasks/technical-readiness",
   },
 ];
@@ -329,6 +332,11 @@ export const ALL_TASK_IDS = TASKS.map((t) => t.id);
 /** IDs of tasks where required !== false. Used for scheduling readiness gate. */
 export const REQUIRED_TASK_IDS = TASKS.filter(
   (t) => t.required !== false,
+).map((t) => t.id);
+
+/** IDs of tasks where required === false. Complete these to improve readiness but they never block scheduling. */
+export const OPTIONAL_TASK_IDS = TASKS.filter(
+  (t) => t.required === false,
 ).map((t) => t.id);
 
 /** Sequential guidance lines for the task page (one at a time in UI). */

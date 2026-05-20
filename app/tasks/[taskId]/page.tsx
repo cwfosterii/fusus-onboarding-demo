@@ -4,6 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { AgencyPointsOfContactForm } from "@/components/tasks/AgencyPointsOfContactForm";
+import { CameraDocumentationForm } from "@/components/tasks/CameraDocumentationForm";
+import {
+  CameraValidationReport,
+  CameraValidatingPlaceholder,
+} from "@/components/tasks/CameraValidationReport";
 import { DataInputModeSelector } from "@/components/tasks/DataInputModeSelector";
 import { ManualEntryForm } from "@/components/tasks/ManualEntryForm";
 import { TaskForm } from "@/components/tasks/TaskForm";
@@ -45,9 +50,26 @@ import {
   taskUsesDualInputModes,
   writeInputModeToStorage,
   writeTemplateMetaToStorage,
+  CAMERA_READINESS_TASK_ID,
   type DataInputMode,
   type SpreadsheetUploadMeta,
 } from "@/lib/readiness-data-input";
+import {
+  defaultCameraRow,
+  isCameraListValid,
+  readCameraListFromStorage,
+  writeCameraListToStorage,
+  type CameraRow,
+} from "@/lib/camera-schema";
+import { parseCameraFile } from "@/lib/camera-file-parser";
+import {
+  runDeterministicValidation,
+  deriveState,
+  readValidationResultFromStorage,
+  writeValidationResultToStorage,
+  clearValidationResultFromStorage,
+  type CameraValidationResult,
+} from "@/lib/camera-validation";
 import {
   advanceGuidanceVisibleIndex,
   completeTask,
@@ -113,16 +135,26 @@ function taskFormIsValid(
     enabled: boolean;
     mode: DataInputMode;
     templateMeta: SpreadsheetUploadMeta | null;
+    cameraRows?: CameraRow[];
+    validationState?: string | null;
   },
 ): boolean {
   if (!task.form) return true;
   if (task.id === AGENCY_POC_TASK_ID) return isAgencyPocFormValid(agencyPoc);
-  if (dual?.enabled) {
-    if (dual.mode === "manual") {
+    if (dual?.enabled) {
+      if (dual.mode === "template") {
+        if (task.id === CAMERA_READINESS_TASK_ID) {
+          // Require approved validation for camera upload
+          return dual.validationState === "approved";
+        }
+        return isTemplatePathSatisfied(dual.templateMeta);
+      }
+      // Manual mode
+      if (task.id === CAMERA_READINESS_TASK_ID) {
+        return isCameraListValid(dual.cameraRows ?? []);
+      }
       return isManualEntryValid(task.form.fields, values);
     }
-    return isTemplatePathSatisfied(dual.templateMeta);
-  }
   return genericFormIsValid(task, values);
 }
 
@@ -144,6 +176,12 @@ export default function TaskPage({
   const [dataInputMode, setDataInputMode] = useState<DataInputMode>("manual");
   const [templateFileMeta, setTemplateFileMeta] =
     useState<SpreadsheetUploadMeta | null>(null);
+  const [cameraRows, setCameraRows] = useState<CameraRow[]>(() => [
+    defaultCameraRow(),
+  ]);
+  const [cameraValidation, setCameraValidation] =
+    useState<CameraValidationResult | null>(null);
+  const [cameraValidating, setCameraValidating] = useState(false);
   const [progressTick, setProgressTick] = useState(0);
   const [showPsoNotes, setShowPsoNotes] = useState(false);
   const [lifecycleState, setLifecycleState] =
@@ -188,6 +226,11 @@ export default function TaskPage({
     if (taskUsesDualInputModes(task)) {
       setDataInputMode(readInputModeFromStorage(task.id));
       setTemplateFileMeta(readTemplateMetaFromStorage(task.id));
+      if (task.id === CAMERA_READINESS_TASK_ID) {
+        setCameraRows(readCameraListFromStorage(task.id));
+        const stored = readValidationResultFromStorage(task.id);
+        setCameraValidation(stored);
+      }
     } else {
       setDataInputMode("manual");
       setTemplateFileMeta(null);
@@ -284,6 +327,8 @@ export default function TaskPage({
         enabled: dualEnabled,
         mode: dataInputMode,
         templateMeta: templateFileMeta,
+        cameraRows,
+        validationState: cameraValidation?.state ?? null,
       }) ||
       isTaskDone;
     return isTaskDone || (videoOk && formOk);
@@ -295,6 +340,8 @@ export default function TaskPage({
     agencyPocForm,
     dataInputMode,
     templateFileMeta,
+    cameraRows,
+    cameraValidation,
     isTaskDone,
     progressTick,
   ]);
@@ -308,14 +355,22 @@ export default function TaskPage({
         const data =
           task.id === AGENCY_POC_TASK_ID
             ? toAgencyPocApiPayload(agencyPocForm)
-            : task.form?.dualInputModes
-              ? buildReadinessSubmitData({
-                  taskId: task.id,
-                  mode: dataInputMode,
-                  manualValues: formValues,
-                  templateMeta: templateFileMeta,
-                })
-              : formValues;
+            : task.id === CAMERA_READINESS_TASK_ID
+              ? {
+                  inputMode: dataInputMode,
+                  cameras: dataInputMode === "manual" ? cameraRows : null,
+                  templateUpload:
+                    dataInputMode === "template" ? templateFileMeta : null,
+                  plannedIngestPath: getReadinessIngestApiPath(task.id),
+                }
+              : task.form?.dualInputModes
+                ? buildReadinessSubmitData({
+                    taskId: task.id,
+                    mode: dataInputMode,
+                    manualValues: formValues,
+                    templateMeta: templateFileMeta,
+                  })
+                : formValues;
 
         // 2. Mark as submitted
         submitTask(task.id);
@@ -340,6 +395,8 @@ export default function TaskPage({
           enabled: Boolean(task.form?.dualInputModes),
           mode: dataInputMode,
           templateMeta: templateFileMeta,
+          cameraRows,
+          validationState: cameraValidation?.state ?? null,
         });
         const validatedState = mockValidate(isValid);
 
@@ -373,6 +430,8 @@ export default function TaskPage({
     agencyPocForm,
     dataInputMode,
     templateFileMeta,
+    cameraRows,
+    cameraValidation,
     router,
     bumpProgress,
   ]);
@@ -386,15 +445,123 @@ export default function TaskPage({
   );
 
   const handleTemplateFileSelected = useCallback(
-    (file: File | null) => {
+    async (file: File | null) => {
       const meta = file ? metaFromFile(file) : null;
       setTemplateFileMeta(meta);
       if (task?.id && task.form?.dualInputModes) {
         writeTemplateMetaToStorage(task.id, meta);
       }
+
+      // For the camera task, trigger full parse + validation
+      if (!file || task?.id !== CAMERA_READINESS_TASK_ID) {
+        if (!file && task?.id === CAMERA_READINESS_TASK_ID) {
+          setCameraValidation(null);
+          clearValidationResultFromStorage(task.id);
+        }
+        return;
+      }
+
+      setCameraValidating(true);
+      setCameraValidation(null);
+
+      try {
+        // 1. Parse the file client-side
+        const parseResult = await parseCameraFile(file);
+
+        if (parseResult.parseErrors.some((e) => e.includes("None of the"))) {
+          const errResult: CameraValidationResult = {
+            state: "needs_attention",
+            issues: [
+              {
+                rowNumber: -1,
+                severity: "error",
+                code: "parse_error",
+                message: parseResult.parseErrors.join(" "),
+              },
+            ],
+            parsedRowCount: 0,
+            fileName: file.name,
+            validatedAt: new Date().toISOString(),
+          };
+          setCameraValidation(errResult);
+          writeValidationResultToStorage(task.id, errResult);
+          return;
+        }
+
+        // 2. Run deterministic hard + warning rules
+        const deterministicIssues = runDeterministicValidation(parseResult.rows);
+        const hasHardErrors = deterministicIssues.some(
+          (i) => i.severity === "error",
+        );
+
+        // 3. If no hard errors, call AI for soft review
+        let aiIssues: typeof deterministicIssues = [];
+        let aiInsights: string | undefined;
+
+        if (!hasHardErrors) {
+          try {
+            const res = await fetch("/api/v1/validate/camera-upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                rows: parseResult.rows,
+                fileName: file.name,
+              }),
+            });
+            if (res.ok) {
+              const data = (await res.json()) as {
+                aiIssues?: typeof deterministicIssues;
+                overallInsights?: string;
+              };
+              aiIssues = data.aiIssues ?? [];
+              aiInsights = data.overallInsights || undefined;
+            }
+          } catch {
+            /* AI review is best-effort — don't block on failure */
+          }
+        }
+
+        const allIssues = [...deterministicIssues, ...aiIssues];
+        const finalState = deriveState(allIssues);
+
+        const finalResult: CameraValidationResult = {
+          state: finalState,
+          issues: allIssues,
+          parsedRowCount: parseResult.rows.length,
+          fileName: file.name,
+          validatedAt: new Date().toISOString(),
+          aiInsights,
+        };
+
+        setCameraValidation(finalResult);
+        writeValidationResultToStorage(task.id, finalResult);
+
+        // Also store the parsed rows so manual mode stays in sync
+        if (task.id) writeCameraListToStorage(task.id, parseResult.rows);
+      } finally {
+        setCameraValidating(false);
+      }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [task?.id, task?.form?.dualInputModes],
   );
+
+  const handleCameraRowsChange = useCallback(
+    (rows: CameraRow[]) => {
+      setCameraRows(rows);
+      if (task?.id) writeCameraListToStorage(task.id, rows);
+    },
+    [task?.id],
+  );
+
+  const handleClearValidation = useCallback(() => {
+    setTemplateFileMeta(null);
+    setCameraValidation(null);
+    if (task?.id) {
+      writeTemplateMetaToStorage(task.id, null);
+      clearValidationResultFromStorage(task.id);
+    }
+  }, [task?.id]);
 
   if (!hydrated || !task) {
     if (hydrated && !task) {
@@ -474,6 +641,15 @@ export default function TaskPage({
           </div>
         ) : null}
 
+        {task.required === false && !accessBlocked ? (
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <p className="font-medium">Recommended task</p>
+            <p className="mt-1 text-blue-800/90">
+              Not required to schedule onsite, but completing it improves your deployment readiness and onsite efficiency.
+            </p>
+          </div>
+        ) : null}
+
         <header>
           <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
             {task.title}
@@ -541,23 +717,46 @@ export default function TaskPage({
                     />
                     <div className="border-t border-gray-100 pt-6">
                       {dataInputMode === "manual" ? (
-                        <ManualEntryForm
-                          fields={task.form.fields}
-                          values={formValues}
-                          onChange={handleFormChange}
-                          disabled={accessBlocked}
-                          showRequiredErrors={
-                            lifecycleState === "rejected" ||
-                            !isManualEntryValid(task.form.fields, formValues)
-                          }
-                        />
-                      ) : (
-                        <TemplateUploadPanel
-                          taskId={task.id}
-                          fileMeta={templateFileMeta}
-                          onFileSelected={handleTemplateFileSelected}
-                          disabled={accessBlocked}
-                        />
+                        task.id === CAMERA_READINESS_TASK_ID ? (
+                          <CameraDocumentationForm
+                            rows={cameraRows}
+                            onChange={handleCameraRowsChange}
+                            showValidationErrors={lifecycleState === "rejected"}
+                            disabled={accessBlocked}
+                          />
+                        ) : (
+                          <ManualEntryForm
+                            fields={task.form.fields}
+                            values={formValues}
+                            onChange={handleFormChange}
+                            disabled={accessBlocked}
+                            showRequiredErrors={
+                              lifecycleState === "rejected" ||
+                              !isManualEntryValid(task.form.fields, formValues)
+                            }
+                          />
+                        )
+                        ) : (
+                        <div className="space-y-5">
+                          <TemplateUploadPanel
+                            taskId={task.id}
+                            fileMeta={templateFileMeta}
+                            onFileSelected={(f) => {
+                              void handleTemplateFileSelected(f);
+                            }}
+                            disabled={accessBlocked}
+                          />
+                          {task.id === CAMERA_READINESS_TASK_ID ? (
+                            cameraValidating ? (
+                              <CameraValidatingPlaceholder />
+                            ) : cameraValidation ? (
+                              <CameraValidationReport
+                                result={cameraValidation}
+                                onReupload={handleClearValidation}
+                              />
+                            ) : null
+                          ) : null}
+                        </div>
                       )}
                     </div>
                   </>

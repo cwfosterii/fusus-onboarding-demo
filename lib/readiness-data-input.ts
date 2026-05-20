@@ -3,6 +3,10 @@
  * UI + localStorage only — no ingest API yet. Shapes are forward-compatible.
  */
 
+import {
+  generateCameraTemplateCsv,
+  CAMERA_TEMPLATE_FILENAME,
+} from "@/lib/camera-schema";
 import type { TaskFormField, WorkflowTask } from "@/lib/task-workflow-config";
 
 export type DataInputMode = "manual" | "template";
@@ -18,7 +22,7 @@ export type SpreadsheetUploadMeta = {
 export const TECHNICAL_READINESS_TASK_ID = "technical-readiness-network";
 export const CAMERA_READINESS_TASK_ID = "camera-readiness-assets";
 
-/** Static bulk camera CSV served from `public/templates/`. */
+/** @deprecated Template is now generated from camera-schema.ts. Kept for backward compat. */
 export const CAMERA_BULK_TEMPLATE_PUBLIC_PATH = "/templates/camera_template.csv";
 export const CAMERA_BULK_TEMPLATE_DOWNLOAD_FILENAME = "camera_template.csv";
 
@@ -147,6 +151,13 @@ export function getTemplateDownloadForTask(taskId: string): {
   content: string;
   mimeType: string;
 } {
+  if (taskId === CAMERA_READINESS_TASK_ID) {
+    return {
+      filename: CAMERA_TEMPLATE_FILENAME,
+      content: generateCameraTemplateCsv(),
+      mimeType: "text/csv;charset=utf-8",
+    };
+  }
   if (taskId === TECHNICAL_READINESS_TASK_ID) {
     return {
       filename: getTechnicalReadinessTemplateFilename(),
